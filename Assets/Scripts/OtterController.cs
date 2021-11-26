@@ -4,16 +4,20 @@ using UnityEngine;
 
 public class OtterController : MonoBehaviour
 {
-    public Transform headBone;
-    public Transform targetTransform;
-    public Transform rightEye;
-    public Transform leftEye;
+
+    [SerializeField] Transform targetTransform;
+
 
     //Head parameters
+    [Header("Head parameters and components")]
+    [SerializeField] Transform headBone;
     [SerializeField] float headRotationSpeed = 2f;
     [SerializeField] int maxHeadRotationangle = 30;
 
     //Eyes parameters
+    [Header("Eyes parameters and components")]
+    [SerializeField] Transform rightEye;
+    [SerializeField] Transform leftEye;
     [SerializeField] float eyeTrackingSpeed = 3f;
     [SerializeField] float leftEyeMaxYRotation;
     [SerializeField] float leftEyeMinYRotation;
@@ -25,11 +29,34 @@ public class OtterController : MonoBehaviour
     [SerializeField] float rightEyeMaxXRotation;
     [SerializeField] float rightEyeMinXRotation;
 
+    //Legs parameters and components
+    [Header("Legs parameters and components")]
+    [SerializeField] Transform RightLegTarget;
+    [SerializeField] Transform LeftLegTarget;
+    [SerializeField] Transform RightKnee;
+    [SerializeField] Transform LeftKnee;
+    [SerializeField] Transform LeftLegHome;
+    [SerializeField] Transform RightLegHome;
+    //Stay within this distance of the knee
+    [SerializeField] float distanceForStep;
+    [SerializeField] float footMovementDuration;
+    bool legIsMoving;
+
+    Vector3 initialLeftTargetPos;
+    Vector3 initialRightTargetPos;
+
+
+    private void Start()
+    {
+
+
+    }
 
     void LateUpdate()
     {
         HeadTrackingUpdate();
         EyeTrackingUpdate();
+        LegStepping();
     }
 
     void HeadTrackingUpdate()
@@ -112,7 +139,7 @@ public class OtterController : MonoBehaviour
             rightEyeCurrentXRotation -= 360;
         }
 
-        // Clamp the Y axis rotation according to the Min/Max Y rotation defined in the class attributes
+        // Clamp the Y and X axis rotation according to the Min/Max Y and X rotation defined in the class attributes
         float leftEyeClampedYRotation = Mathf.Clamp(
             leftEyeCurrentYRotation,
             leftEyeMaxYRotation,
@@ -134,7 +161,7 @@ public class OtterController : MonoBehaviour
             rightEyeMinXRotation,
             rightEyeMaxXRotation);
 
-        // Apply the clamped Y rotation without changing the X and Z rotations
+        // Apply the clamped Y and X rotation without changing the X and Z rotations
         leftEye.localEulerAngles = new Vector3(
             leftEyeClampedXRotation,
             leftEyeClampedYRotation,
@@ -146,6 +173,65 @@ public class OtterController : MonoBehaviour
             0
         );
 
+    }
+
+    void LegStepping()
+    {
+        if (legIsMoving) return;
+        else
+        {
+            float distanceFromHomeRight = Vector3.Distance(RightLegTarget.position, RightLegHome.position);
+            float distanceFromHomeLeft = Vector3.Distance(LeftLegTarget.position, LeftLegHome.position);
+
+            //Debug.Log("Dist Right" + distanceFromHomeRight + "\n Dist Left : " + distanceFromHomeLeft);
+
+            if (distanceFromHomeLeft > distanceForStep)
+            {
+                StartCoroutine(legMoveToHome(LeftLegTarget));
+            }
+            if (distanceFromHomeRight > distanceForStep)
+            {
+                StartCoroutine(legMoveToHome(RightLegTarget));
+            }
+        }
+    }
+
+    IEnumerator legMoveToHome(Transform targetLeg)
+    {
+        legIsMoving = true;
+
+        Transform currentLegHome = targetLeg.gameObject.GetComponent<LegHandler>().legHome;
+
+        Quaternion startRotation = targetLeg.rotation;
+        Vector3 startPosition = targetLeg.position;
+
+        Quaternion endRotation = currentLegHome.localRotation;
+        Debug.Log(endRotation.x);
+        Vector3 endPosition = currentLegHome.position;
+
+        // Time since step started
+        float timeElapsed = 0;
+
+        // Here we use a do-while loop so the normalized time goes past 1.0 on the last iteration,
+        // placing us at the end position before ending.
+        do
+        {
+            // Add time since last frame to the time elapsed
+            timeElapsed += Time.deltaTime;
+
+            float normalizedTime = timeElapsed / footMovementDuration;
+
+            // Interpolate position and rotation
+            targetLeg.transform.position = Vector3.Lerp(startPosition, endPosition, normalizedTime);
+            targetLeg.transform.rotation = Quaternion.Slerp(startRotation, endRotation, normalizedTime);
+
+            // Wait for one frame
+            yield return null;
+        }
+        while (timeElapsed < footMovementDuration);
+
+        // Done moving
+        legIsMoving = false;
     }
 }
 
