@@ -7,6 +7,24 @@ public class OtterController : MonoBehaviour
 
     [SerializeField] Transform targetTransform;
 
+    //Root motion parameters
+    [Header("Body movement parameters")]
+    // How fast we can turn and move full throttle
+    [SerializeField] float turnSpeed;
+    [SerializeField] float moveSpeed;
+    // How fast we will reach the above speeds
+    [SerializeField] float turnAcceleration;
+    [SerializeField] float moveAcceleration;
+    // Try to stay in this range from the target
+    [SerializeField] float minDistToTarget;
+    [SerializeField] float maxDistToTarget;
+    // If we are above this angle from the target, start turning
+    [SerializeField] float maxAngToTarget;
+
+    // World space velocity
+    Vector3 currentVelocity;
+    // We are only doing a rotation around the up axis, so we only use a float here
+    float currentAngularVelocity;
 
     //Head parameters
     [Header("Head parameters and components")]
@@ -29,7 +47,7 @@ public class OtterController : MonoBehaviour
     [SerializeField] float rightEyeMaxXRotation;
     [SerializeField] float rightEyeMinXRotation;
 
-    //Legs parameters and components
+    //Legs parameters
     [Header("Legs parameters and components")]
     [SerializeField] Transform RightLegTarget;
     [SerializeField] Transform LeftLegTarget;
@@ -40,15 +58,21 @@ public class OtterController : MonoBehaviour
     //Stay within this distance of the knee
     [SerializeField] float distanceForStep;
     [SerializeField] float footMovementDuration;
-    bool legIsMoving;
+    [SerializeField] float stepOvershootFractionUpperBound;
+    [SerializeField] float stepOverShootFractionLowerBound;
 
-    Vector3 initialLeftTargetPos;
-    Vector3 initialRightTargetPos;
+    bool legIsMoving;
+    Transform lastLegWhoHasMoved;
+
+    //Arms parameters
+    [Header("Arms parameters and components")]
+    [SerializeField] Transform RightArmTarget;
+    [SerializeField] Transform LeftArmTarget;
+    [SerializeField]
 
 
     private void Start()
     {
-
 
     }
 
@@ -57,12 +81,13 @@ public class OtterController : MonoBehaviour
         HeadTrackingUpdate();
         EyeTrackingUpdate();
         LegStepping();
+        RootMotionUpdate();
     }
 
     void HeadTrackingUpdate()
     {
         //Storing the current head rotation
-        Quaternion currentLocalHeadRotation = headBone.localRotation;
+        Quaternion currentLocalHeadRotation = headBone.rotation;
 
         //We want to work in world space to apply angle limit on the head rotation, so we're gonna transform local to word space
         headBone.localRotation = Quaternion.identity;
@@ -81,21 +106,22 @@ public class OtterController : MonoBehaviour
         );
 
         //The head rotation that the model should have to look at the object
-        Quaternion targetLocalHeadRotation = Quaternion.LookRotation(headToObjectLocalVector, Vector3.up);
+        Quaternion targetLocalHeadRotation = Quaternion.LookRotation(headToObjectWorldVector, Vector3.up);
 
         //Lerp to smooth the head rotation
         headBone.rotation = Quaternion.Slerp(
-            currentLocalHeadRotation,
-            targetLocalHeadRotation,
-            1 - Mathf.Exp(-headRotationSpeed * Time.deltaTime)
-        );
+        currentLocalHeadRotation,
+        targetLocalHeadRotation,
+        1 - Mathf.Exp(-headRotationSpeed * Time.deltaTime)
+    );
+
     }
 
     void EyeTrackingUpdate()
     {
         //Set up the rotation we want the eyes to have to look at the target object
         Quaternion targetEyeRotation = Quaternion.LookRotation(
-          headBone.position - targetTransform.position, 
+          headBone.position - targetTransform.position,
           transform.up
         );
 
@@ -175,64 +201,179 @@ public class OtterController : MonoBehaviour
 
     }
 
+    #region Leg Movement
     void LegStepping()
     {
-        if (legIsMoving) return;
-        else
+
+        //We check which leg should move based on the last one who has moved
+        if (lastLegWhoHasMoved == RightLegTarget && !RightLegTarget.gameObject.GetComponent<LegHandler>().legIsMoving)
         {
-            float distanceFromHomeRight = Vector3.Distance(RightLegTarget.position, RightLegHome.position);
-            float distanceFromHomeLeft = Vector3.Distance(LeftLegTarget.position, LeftLegHome.position);
-
-            //Debug.Log("Dist Right" + distanceFromHomeRight + "\n Dist Left : " + distanceFromHomeLeft);
-
-            if (distanceFromHomeLeft > distanceForStep)
-            {
-                StartCoroutine(legMoveToHome(LeftLegTarget));
-            }
-            if (distanceFromHomeRight > distanceForStep)
-            {
-                StartCoroutine(legMoveToHome(RightLegTarget));
-            }
+            TryMoveLeg(LeftLegTarget);
         }
+        else if (!LeftLegTarget.gameObject.GetComponent<LegHandler>().legIsMoving)
+        {
+            TryMoveLeg(RightLegTarget);
+        }
+
+    }
+
+    void TryMoveLeg(Transform legToMove)
+    {
+        //If the leg is currently moving, we shouldn't start the coroutine again
+        if (legToMove.gameObject.GetComponent<LegHandler>().legIsMoving) return;
+
+
+        float distanceFromHome = Vector3.Distance(legToMove.position, legToMove.gameObject.GetComponent<LegHandler>().legHome.position);
+
+
+        if (distanceFromHome > distanceForStep)
+        {
+            StartCoroutine(legMoveToHome(legToMove));
+        }
+
     }
 
     IEnumerator legMoveToHome(Transform targetLeg)
     {
-        legIsMoving = true;
 
+        targetLeg.gameObject.GetComponent<LegHandler>().legIsMoving = true;
+
+        //We store the last leg who has moved to make sure that they move alternatively between right and left
+        lastLegWhoHasMoved = targetLeg;
+
+        //Get the home position of the leg, it's the position that we want to reach if we're too far from it
         Transform currentLegHome = targetLeg.gameObject.GetComponent<LegHandler>().legHome;
 
+        //The position and rotation before the movement
         Quaternion startRotation = targetLeg.rotation;
         Vector3 startPosition = targetLeg.position;
 
-        Quaternion endRotation = currentLegHome.localRotation;
-        Debug.Log(endRotation.x);
-        Vector3 endPosition = currentLegHome.position;
+        //Vector from the foot to the home position that we want to reach
+        Vector3 towardHome = currentLegHome.position - transform.position;
 
-        // Time since step started
+        //Calcultation of the total distance to reach with an overshoot in order to make a curve with the leg
+        //The overshoot is random to make the movement a bit more natural
+        float stepWithOvershoot = distanceForStep * Random.Range(stepOvershootFractionUpperBound, stepOverShootFractionLowerBound);
+        Vector3 stepWithOvershootVector = towardHome * stepWithOvershoot;
+        stepWithOvershootVector = Vector3.ProjectOnPlane(stepWithOvershootVector, Vector3.back);
+
+        //We apply the overshoot to the position we want to reach
+        Vector3 endPosition = currentLegHome.position + stepWithOvershootVector;
+
+        //Calculating the center point of the distance in order to make a curve with the leg
+        Vector3 stepCenterPoint = (startPosition + endPosition) / 2;
+        //We have to lift the leg up to make a curve
+        stepCenterPoint += -currentLegHome.forward * Vector3.Distance(startPosition, endPosition) * 1.5f;
+
+        //The end rotation that we want to reach
+        Quaternion endRotation = currentLegHome.localRotation;
+
+
+        //Start timer for the lerp
         float timeElapsed = 0;
 
-        // Here we use a do-while loop so the normalized time goes past 1.0 on the last iteration,
-        // placing us at the end position before ending.
+        // We make the movement of the leg towards the home position using a lerp to smooth it down. 
+        // The while is here to stop when we reach the timer.
         do
         {
             // Add time since last frame to the time elapsed
             timeElapsed += Time.deltaTime;
-
+            //We clamp the time value between 0 and 1
             float normalizedTime = timeElapsed / footMovementDuration;
 
-            // Interpolate position and rotation
-            targetLeg.transform.position = Vector3.Lerp(startPosition, endPosition, normalizedTime);
-            targetLeg.transform.rotation = Quaternion.Slerp(startRotation, endRotation, normalizedTime);
+            //Applying a bezier curve to the movement
+            targetLeg.position =
+                Vector3.Lerp(
+                    Vector3.Lerp(startPosition, stepCenterPoint, normalizedTime),
+                    Vector3.Lerp(stepCenterPoint, endPosition, normalizedTime),
+                    normalizedTime
+            );
 
-            // Wait for one frame
+            //Smoothing the movement of the rotation if the leg needs one
+            //targetLeg.rotation = Quaternion.Slerp(startRotation, endRotation, normalizedTime);
+            targetLeg.rotation = Quaternion.LookRotation(-transform.forward, Vector3.up);
+
+            // Wait for the end of the frame
             yield return null;
         }
         while (timeElapsed < footMovementDuration);
 
         // Done moving
-        legIsMoving = false;
+        targetLeg.gameObject.GetComponent<LegHandler>().legIsMoving = false;
+    }
+
+    #endregion
+    void RootMotionUpdate()
+    {
+        // Get the direction toward our target
+        Vector3 towardTarget = targetTransform.position - transform.position;
+        // Vector toward target on the local XZ plane
+        Vector3 towardTargetProjected = Vector3.ProjectOnPlane(towardTarget, transform.up);
+        // Get the angle from the gecko's forward direction to the direction toward toward our target
+        // Here we get the signed angle around the up vector so we know which direction to turn in
+        float angToTarget = Vector3.SignedAngle(transform.forward, towardTargetProjected, transform.up);
+
+        float targetAngularVelocity = 0;
+
+        // If we are within the max angle (i.e. approximately facing the target)
+        // leave the target angular velocity at zero
+        if (Mathf.Abs(angToTarget) > maxAngToTarget)
+        {
+            // Angles in Unity are clockwise, so a positive angle here means to our right
+            if (angToTarget > 0)
+            {
+                targetAngularVelocity = turnSpeed;
+            }
+            // Invert angular speed if target is to our left
+            else
+            {
+                targetAngularVelocity = -turnSpeed;
+            }
+        }
+
+        // Use our smoothing function to gradually change the velocity
+        currentAngularVelocity = Mathf.Lerp(
+          currentAngularVelocity,
+          targetAngularVelocity,
+          1 - Mathf.Exp(-turnAcceleration * Time.deltaTime)
+        );
+
+        // Rotate the transform around the Y axis in world space, 
+        // making sure to multiply by delta time to get a consistent angular velocity
+        transform.Rotate(0, Time.deltaTime * currentAngularVelocity, 0, Space.World);
+
+        Vector3 targetVelocity = Vector3.zero;
+
+        //No need to move if we're facing the target
+        if(Mathf.Abs(angToTarget) < 90)
+        {
+            //Distance from character to target
+            float distToTarget = Vector3.Distance(transform.position, targetTransform.position);
+
+            //If the target is too far away, the character will walk towards it
+            if(distToTarget > maxDistToTarget)
+            {
+                targetVelocity = moveSpeed * towardTargetProjected.normalized;
+            }
+
+            //If the target is too close, the character steps back
+            else if(distToTarget < minDistToTarget)
+            {
+                targetVelocity = moveSpeed * -towardTargetProjected.normalized;
+            }
+        }
+        //Lerp to smooth the movement and apply acceleration
+        currentVelocity =
+            Vector3.Lerp(
+                currentVelocity,
+                targetVelocity,
+                1 - Mathf.Exp(-moveAcceleration * Time.deltaTime)
+        );
+
+        //Applying the velocity
+        transform.position += currentVelocity * Time.deltaTime;
     }
 }
+ 
 
 
