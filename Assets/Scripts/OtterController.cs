@@ -68,12 +68,14 @@ public class OtterController : MonoBehaviour
     [Header("Arms parameters and components")]
     [SerializeField] Transform RightArmTarget;
     [SerializeField] Transform LeftArmTarget;
-    [SerializeField]
+    [SerializeField] Transform RightHand;
+    [SerializeField] Transform LeftHand;
+    [SerializeField] Transform LeftHandGrab;
+    [SerializeField] Transform RightHandGrab;
 
 
     private void Start()
     {
-
     }
 
     void LateUpdate()
@@ -82,6 +84,7 @@ public class OtterController : MonoBehaviour
         EyeTrackingUpdate();
         LegStepping();
         RootMotionUpdate();
+        ArmMovement();
     }
 
     void HeadTrackingUpdate()
@@ -253,13 +256,21 @@ public class OtterController : MonoBehaviour
 
         //Calcultation of the total distance to reach with an overshoot in order to make a curve with the leg
         //The overshoot is random to make the movement a bit more natural
-        float stepWithOvershoot = distanceForStep * Random.Range(stepOvershootFractionUpperBound, stepOverShootFractionLowerBound);
+        float stepWithOvershoot = distanceForStep + (2 * Mathf.Abs(currentVelocity.magnitude));
+            //Random.Range(stepOvershootFractionUpperBound, stepOverShootFractionLowerBound);
         Vector3 stepWithOvershootVector = towardHome * stepWithOvershoot;
-        stepWithOvershootVector = Vector3.ProjectOnPlane(stepWithOvershootVector, Vector3.back);
+        
+        stepWithOvershootVector = Vector3.ProjectOnPlane(stepWithOvershootVector, Vector3.up);
+        //stepWithOvershootVector = new Vector3(0, 0, stepWithOvershootVector.z);
+
 
         //We apply the overshoot to the position we want to reach
-        Vector3 endPosition = currentLegHome.position + stepWithOvershootVector;
-
+        //Vector3 endPosition = currentLegHome.position + stepWithOvershootVector;
+        Vector3 endPosition = currentLegHome.position + (currentVelocity * 0.05f);
+        Debug.DrawLine(startPosition, currentLegHome.position);
+        Debug.DrawLine(startPosition, endPosition, Color.red);
+        Debug.Log(stepWithOvershootVector.z);
+        //Debug.Break();
         //Calculating the center point of the distance in order to make a curve with the leg
         Vector3 stepCenterPoint = (startPosition + endPosition) / 2;
         //We have to lift the leg up to make a curve
@@ -372,6 +383,22 @@ public class OtterController : MonoBehaviour
 
         //Applying the velocity
         transform.position += currentVelocity * Time.deltaTime;
+    }
+
+    void ArmMovement()
+    {
+        Vector3 leftArmTowardTarget = targetTransform.position - LeftArmTarget.position;
+        Vector3 rightArmTowardTarget = targetTransform.position - RightArmTarget.position;
+
+        LeftArmTarget.position = LeftHandGrab.position;
+        RightArmTarget.position = RightHandGrab.position;
+
+        LeftArmTarget.rotation = LeftHandGrab.rotation;
+        RightArmTarget.rotation = RightHandGrab.rotation;
+
+
+
+
     }
 }
  
