@@ -8,10 +8,12 @@ public class CubeController : MonoBehaviour
     public float yScrollSpeed = 0.2f;
     public bool mouseMovement = false;
     public Transform otter;
+    public Transform cookie;
+    Quaternion cookieRotation;
     // Start is called before the first frame update
     void Start()
     {
-        
+        cookieRotation = cookie.rotation;
     }
 
     // Update is called once per frame
@@ -31,6 +33,7 @@ public class CubeController : MonoBehaviour
         }
 
         transform.LookAt(otter);
+        cookie.rotation = cookieRotation;
 
         
     }
